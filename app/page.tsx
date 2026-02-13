@@ -126,9 +126,9 @@ export default function Home() {
       {/* header */}
       <header className="bg-white border-b border-[var(--border)] sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-6 py-4">
-          <h1 className="text-2xl font-bold">AI 论文深度分析器</h1>
+          <h1 className="text-2xl font-bold">AI 论文 & 文章深度分析器</h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            输入 arXiv ID、论文链接或英文标题，自动获取全文并深度拆解分析，中文输出
+            输入 arXiv ID、论文/文章链接或标题，自动搜索获取全文并深度拆解分析，中文输出
           </p>
         </div>
       </header>
@@ -142,7 +142,7 @@ export default function Home() {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && !isLoading && handleAnalyze()}
-              placeholder="输入 arXiv ID（如 1706.03762）、链接或论文标题"
+              placeholder="输入 arXiv ID、论文/文章链接或标题（如 Attention Is All You Need）"
               className="flex-1 px-4 py-2.5 border border-[var(--border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
               disabled={isLoading}
             />
@@ -276,7 +276,7 @@ export default function Home() {
           <div className="text-center py-16 text-[var(--muted-foreground)]">
             <p className="text-4xl mb-4">📄</p>
             <p className="text-sm">输入论文信息开始分析</p>
-            <p className="text-xs mt-2">支持 arXiv ID、arXiv 链接、DOI 或英文论文标题</p>
+            <p className="text-xs mt-2">支持 arXiv ID、论文/文章链接、DOI 或标题（学术论文、技术博客、研究报告均可）</p>
           </div>
         )}
       </main>

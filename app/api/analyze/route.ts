@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { execSync } from 'child_process';
 
 export const maxDuration = 120; // allow long-running analysis
 
@@ -130,6 +131,41 @@ async function searchArxiv(query: string): Promise<PaperMeta | null> {
     return null;
   } catch {
     return null;
+  }
+}
+
+// ---- web search via DuckDuckGo (for blog posts, articles, tech reports) ----
+
+async function webSearch(query: string): Promise<{ title: string; url: string }[]> {
+  try {
+    // DuckDuckGo blocks Node.js fetch but allows curl, so use child_process
+    const encoded = encodeURIComponent(query);
+    const html = execSync(
+      `curl -s -X POST "https://html.duckduckgo.com/html/" -d "q=${encoded}" -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" --max-time 10`,
+      { timeout: 12000, encoding: 'utf-8' }
+    );
+
+    const results: { title: string; url: string }[] = [];
+
+    // DuckDuckGo HTML results: <a class="result__a" href="URL">Title</a>
+    const linkRegex = /class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let match;
+    while ((match = linkRegex.exec(html)) !== null && results.length < 5) {
+      let url = match[1];
+      const title = match[2].replace(/<[^>]+>/g, '').replace(/&#\w+;/g, '').trim();
+
+      // handle uddg redirect wrapper if present
+      const uddg = url.match(/uddg=([^&]+)/);
+      if (uddg) url = decodeURIComponent(uddg[1]);
+
+      if (url.startsWith('http') && !url.includes('duckduckgo.com')) {
+        results.push({ title, url });
+      }
+    }
+
+    return results;
+  } catch {
+    return [];
   }
 }
 
@@ -294,9 +330,17 @@ async function searchByTitle(title: string): Promise<PaperMeta | null> {
 
 // ---- analysis prompt ----
 
-const SYSTEM_PROMPT = `你是一位资深学术论文分析专家，拥有深厚的跨学科知识。请用通俗易懂但专业的中文对论文进行深度分析。输出使用 Markdown 格式，层次清晰、内容详实。
+const SYSTEM_PROMPT = `你是一位资深的技术文章和学术论文分析专家，拥有深厚的跨学科知识。请用通俗易懂但专业的中文进行深度分析。输出使用 Markdown 格式，层次清晰、内容详实。
 
-重要：如果提供的论文内容不完整或只有标题，请充分利用你训练数据中的知识来分析这篇论文。你大概率在训练过程中已经学习过这篇论文的内容。即使论文全文未提供，也请尽力给出详尽的分析。如果确实不了解这篇论文，请如实说明。`;
+你可以分析以下类型的内容：
+- 学术论文（arXiv、期刊、会议论文）
+- 技术博客文章（如 Anthropic、OpenAI、Google、Meta 等公司的技术博客）
+- 技术报告和白皮书
+- 研究笔记和技术文档
+
+重要：如果提供的内容不完整或只有标题，请充分利用你训练数据中的知识来分析。你大概率在训练过程中已经学习过相关内容。即使全文未提供，也请尽力给出详尽的分析。如果确实不了解，请如实说明。
+
+对于非学术论文（如博客文章），请灵活调整分析框架，不必严格遵循学术论文的评分体系，而是侧重于内容价值、技术深度和实践意义。`;
 
 function buildPrompt(meta: PaperMeta, fullText: string, impact: ImpactData | null): string {
   const impactInfo = impact
@@ -442,9 +486,36 @@ export async function POST(request: NextRequest) {
             } catch { /* continue */ }
           }
 
-          // Strategy 4: if still not found, let AI analyze based on title alone
+          // Strategy 4: Web search (for blog posts, tech articles, etc.)
           if (!meta) {
-            emit('status', { message: '未在学术数据库中找到精确匹配，将基于标题让 AI 分析（可能是博客/报告/非正式论文）...' });
+            emit('status', { message: '正在互联网上搜索文章...' });
+            const searchResults = await webSearch(parsed.id);
+            if (searchResults.length > 0) {
+              // try fetching the top results until we get content
+              for (const result of searchResults.slice(0, 3)) {
+                emit('status', { message: `正在获取: ${result.title || result.url}` });
+                const page = await fetchWebPage(result.url);
+                if (page && page.text.length > 200) {
+                  let hostname = '';
+                  try { hostname = new URL(result.url).hostname; } catch {}
+                  meta = {
+                    title: page.title || result.title || parsed.id,
+                    authors: [],
+                    abstract: page.text.slice(0, 1000),
+                    year: '',
+                    venue: hostname,
+                    url: result.url,
+                  };
+                  fullText = page.text;
+                  break;
+                }
+              }
+            }
+          }
+
+          // Strategy 5: if still not found, let AI analyze based on title alone
+          if (!meta) {
+            emit('status', { message: '未找到原文，将基于 AI 知识进行分析...' });
             meta = {
               title: parsed.id,
               authors: [],
