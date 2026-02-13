@@ -1,5 +1,4 @@
 import { NextRequest } from 'next/server';
-import { execSync } from 'child_process';
 
 export const maxDuration = 120; // allow long-running analysis
 
@@ -141,37 +140,54 @@ async function searchArxiv(query: string): Promise<PaperMeta | null> {
 
 // ---- web search via DuckDuckGo (for blog posts, articles, tech reports) ----
 
+function parseDDGResults(html: string): { title: string; url: string }[] {
+  const results: { title: string; url: string }[] = [];
+  const linkRegex = /class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = linkRegex.exec(html)) !== null && results.length < 5) {
+    let url = match[1];
+    const title = match[2].replace(/<[^>]+>/g, '').replace(/&#\w+;/g, '').trim();
+    const uddg = url.match(/uddg=([^&]+)/);
+    if (uddg) url = decodeURIComponent(uddg[1]);
+    if (url.startsWith('http') && !url.includes('duckduckgo.com')) {
+      results.push({ title, url });
+    }
+  }
+  return results;
+}
+
 async function webSearch(query: string): Promise<{ title: string; url: string }[]> {
+  const encoded = encodeURIComponent(query);
+
+  // Strategy 1: try fetch (works on Vercel/serverless)
   try {
-    // DuckDuckGo blocks Node.js fetch but allows curl, so use child_process
-    const encoded = encodeURIComponent(query);
+    const res = await fetch('https://html.duckduckgo.com/html/', {
+      method: 'POST',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: `q=${encoded}`,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const results = parseDDGResults(html);
+      if (results.length > 0) return results;
+    }
+  } catch { /* fall through to curl */ }
+
+  // Strategy 2: try curl (works on local/VM environments)
+  try {
+    const { execSync } = await import('child_process');
     const html = execSync(
       `curl -s -X POST "https://html.duckduckgo.com/html/" -d "q=${encoded}" -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" --max-time 10`,
       { timeout: 12000, encoding: 'utf-8' }
     );
+    return parseDDGResults(html);
+  } catch { /* give up */ }
 
-    const results: { title: string; url: string }[] = [];
-
-    // DuckDuckGo HTML results: <a class="result__a" href="URL">Title</a>
-    const linkRegex = /class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
-    let match;
-    while ((match = linkRegex.exec(html)) !== null && results.length < 5) {
-      let url = match[1];
-      const title = match[2].replace(/<[^>]+>/g, '').replace(/&#\w+;/g, '').trim();
-
-      // handle uddg redirect wrapper if present
-      const uddg = url.match(/uddg=([^&]+)/);
-      if (uddg) url = decodeURIComponent(uddg[1]);
-
-      if (url.startsWith('http') && !url.includes('duckduckgo.com')) {
-        results.push({ title, url });
-      }
-    }
-
-    return results;
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 // ---- fetch web page as text (for blog posts, non-arXiv papers) ----
