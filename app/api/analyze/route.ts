@@ -41,17 +41,22 @@ async function fetchArxiv(id: string): Promise<PaperMeta | null> {
     if (!res.ok) return null;
     const xml = await res.text();
 
+    // extract from <entry> block to avoid matching feed-level tags
+    const entryMatch = xml.match(/<entry>([\s\S]*?)<\/entry>/);
+    if (!entryMatch) return null;
+    const entry = entryMatch[1];
+
     const extract = (tag: string) => {
-      const m = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
+      const m = entry.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
       return m ? m[1].trim() : '';
     };
 
-    const title = extract('title').replace(/\n/g, ' ');
-    const abstract = extract('summary').replace(/\n/g, ' ');
+    const title = extract('title').replace(/\n/g, ' ').replace(/\s+/g, ' ');
+    const abstract = extract('summary').replace(/\n/g, ' ').replace(/\s+/g, ' ');
     const published = extract('published');
 
     // authors
-    const authorMatches = [...xml.matchAll(/<author>\s*<name>([^<]+)<\/name>/g)];
+    const authorMatches = [...entry.matchAll(/<author>\s*<name>([^<]+)<\/name>/g)];
     const authors = authorMatches.map(m => m[1].trim());
 
     if (!title || title === 'Error') return null;
@@ -342,68 +347,163 @@ const SYSTEM_PROMPT = `你是一位资深的技术文章和学术论文分析专
 
 对于非学术论文（如博客文章），请灵活调整分析框架，不必严格遵循学术论文的评分体系，而是侧重于内容价值、技术深度和实践意义。`;
 
-function buildPrompt(meta: PaperMeta, fullText: string, impact: ImpactData | null): string {
+function buildPrompt(
+  meta: PaperMeta,
+  fullText: string,
+  impact: ImpactData | null,
+  detailLevel: string,
+  outputFormat: string,
+): string {
   const impactInfo = impact
     ? `\n- 被引用次数：${impact.citations}（其中高影响力引用 ${impact.influentialCitations} 次）\n- 研究领域：${impact.fieldsOfStudy.join(', ') || '未分类'}\n- 一句话摘要：${impact.tldr || '无'}`
     : '';
 
   const paperContent = fullText || meta.abstract || '（未获取到论文全文和摘要，请基于你对这篇论文的了解进行分析）';
 
-  return `请对以下学术论文进行全面深度分析，全部用中文输出。如果论文内容部分缺失，请结合你训练数据中对该论文的了解来补充分析。
+  const header = `请对以下内容进行分析，全部用中文输出。如果内容部分缺失，请结合你训练数据中的了解来补充。
 
-## 论文信息
+## 文章信息
 - 标题：${meta.title}
-- 作者：${meta.authors.join(', ')}
-- 发表年份：${meta.year}
-- 发表渠道：${meta.venue || '未知'}${impactInfo}
+- 作者：${meta.authors.join(', ') || '未知'}
+- 发表年份：${meta.year || '未知'}
+- 来源：${meta.venue || '未知'}${impactInfo}
 
-## 论文内容
+## 文章内容
 ${paperContent}
 
 ---
 
-请严格按照以下结构输出分析报告：
+`;
 
-## 一、论文概述
-用 2-3 段通俗语言概括论文的核心问题、方法和结论。让非专业读者也能快速理解。
+  // detail level instructions
+  const detailInstructions: Record<string, string> = {
+    quick: '请用简洁精炼的方式输出，总字数控制在 800 字以内。重点突出核心要点，不需要展开太多细节。',
+    standard: '请用适中的篇幅输出，总字数约 2000-3000 字。既要有结构，也要有足够的解释和分析。',
+    deep: '请用极其详细的方式输出，不限字数（建议 4000-8000 字）。每个部分都要深入展开，包含技术细节、公式解读、类比说明等。对复杂概念要用多种方式解释。',
+  };
+
+  // output format templates
+  const formatTemplates: Record<string, string> = {
+    report: `请按照以下结构输出分析报告：
+
+## 一、概述
+用通俗语言概括核心问题、方法和结论。
 
 ## 二、核心贡献与创新点
-列出论文最重要的 3-5 个贡献，每个贡献用 1-2 句话解释其意义。
+列出最重要的贡献，每个贡献解释其意义。
 
-## 三、研究方法论
-详细拆解论文的技术路线、模型架构或实验设计。用类比帮助理解复杂概念。
+## 三、方法论与技术路线
+拆解技术路线、模型架构或实验设计。用类比帮助理解。
 
 ## 四、关键实验与结果
-分析主要实验：基准数据集、对比方法、关键指标。结果是否有说服力？
+分析实验设计、对比方法、关键指标和结果说服力。
 
-## 五、技术细节深度拆解
-选取 2-3 个最重要的技术点深入解读（如核心公式、算法流程、架构设计）。
+## 五、技术细节拆解
+选取最重要的技术点深入解读。
 
 ## 六、局限性与不足
-客观分析论文的局限、假设条件、潜在问题。
+客观分析局限、假设条件、潜在问题。
 
-## 七、业界反响与实际应用
-${impact?.citations ? `该论文已被引用 ${impact.citations} 次。` : ''}
-基于你的知识，分析：
-- 后续重要的跟进研究（列出具体论文/项目名称）
-- 在工业界的实际应用场景
-- 对整个研究领域的影响和推动
+## 七、业界反响与应用
+${impact?.citations ? `该文已被引用 ${impact.citations} 次。` : ''}分析后续研究、工业应用和领域影响。
 
 ## 八、综合评价
-给出 10 分制评分，从以下维度评价：
-- 创新性（x/10）
-- 技术深度（x/10）
-- 实验充分性（x/10）
-- 影响力（x/10）
-- 总评（x/10）
+给出 10 分制评分（创新性、技术深度、实验充分性、影响力、总评），以及一段整体评价。`,
 
-最后给出一段整体评价，包括论文的历史定位和长远意义。`;
+    explain: `请用轻松通俗的语言来解读，像给一个聪明但非本领域的朋友讲解一样。要求：
+
+## 这篇文章讲了什么？
+用最简单的话概括，避免术语。如果必须用专业词汇，请立刻用括号解释。
+
+## 它为什么重要？
+放在大背景下解释这件事的意义，让读者产生"哦原来如此"的感觉。
+
+## 核心思路是什么？
+用生活中的类比来解释核心技术方法。比如"就像……一样"。
+
+## 具体是怎么做的？
+分步骤讲解，每一步都用浅显的语言。
+
+## 效果怎么样？
+用具体数字或比较来说明效果，不要只说"显著提升"。
+
+## 有什么不足？
+诚实地指出问题，以及未来可能的改进方向。
+
+## 一句话总结
+用一句话概括这篇文章的核心价值。`,
+
+    keypoints: `请用精简的要点形式输出，要求干净利落、信息密度高：
+
+## 一句话总结
+> 用一句话概括全文核心
+
+## 核心要点
+用编号列表列出 5-8 个最重要的要点，每个要点 1-2 句话。
+
+## 关键数据
+列出文章中最重要的数字、指标和对比结果。
+
+## 方法亮点
+用 3-5 个要点概括技术方法的精华。
+
+## 局限与争议
+用 2-3 个要点指出不足。
+
+## 实践启示
+对从业者有什么具体的可行建议？列出 3-5 条。
+
+## 相关推荐
+推荐 3-5 篇相关的论文/文章/项目供进一步阅读。`,
+
+    review: `请以同行评审专家的视角进行严谨的批判性评议：
+
+## 论文/文章摘要
+用 3-5 句话精确概括。
+
+## 主要贡献
+客观列出声称的贡献，并评估每个贡献的真实新颖性。
+
+## 方法论评估
+- 技术路线是否合理？有无逻辑漏洞？
+- 假设条件是否过强？
+- 与现有方法的对比是否公平充分？
+
+## 实验评估
+- 实验设计是否严谨？基准选择是否合适？
+- 消融实验是否充分？
+- 结果的统计显著性如何？
+- 是否有选择性报告的嫌疑？
+
+## 写作质量
+评价文章的清晰度、逻辑结构和表达质量。
+
+## 主要优点
+列出 3-5 个突出的优点。
+
+## 主要问题
+列出 3-5 个需要改进或值得质疑的问题，按严重程度排序。
+
+## 次要问题
+列出一些不影响核心结论但值得注意的小问题。
+
+## 评审建议
+给出明确的建议：强烈推荐 / 推荐 / 弱推荐 / 弱拒绝 / 拒绝，并解释理由。
+
+## 改进建议
+具体说明如果作者要修改，最应该改进哪些方面。`,
+  };
+
+  const detail = detailInstructions[detailLevel] || detailInstructions.standard;
+  const format = formatTemplates[outputFormat] || formatTemplates.report;
+
+  return header + detail + '\n\n' + format;
 }
 
 // ---- main handler ----
 
 export async function POST(request: NextRequest) {
-  const { input, apiKey } = await request.json();
+  const { input, apiKey, detailLevel = 'standard', outputFormat = 'report' } = await request.json();
 
   if (!input || !apiKey) {
     return Response.json({ error: '请提供论文信息和 API Key' }, { status: 400 });
@@ -553,7 +653,7 @@ export async function POST(request: NextRequest) {
         // 5. AI analysis (streaming)
         emit('status', { message: '正在进行深度分析（Qwen AI）...' });
 
-        const prompt = buildPrompt(meta, fullText, impact);
+        const prompt = buildPrompt(meta, fullText, impact, detailLevel, outputFormat);
 
         const qwenRes = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
           method: 'POST',
@@ -569,7 +669,7 @@ export async function POST(request: NextRequest) {
             ],
             stream: true,
             temperature: 0.3,
-            max_tokens: 8000,
+            max_tokens: detailLevel === 'quick' ? 2000 : detailLevel === 'deep' ? 16000 : 8000,
           }),
         });
 

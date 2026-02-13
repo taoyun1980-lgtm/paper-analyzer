@@ -6,6 +6,19 @@ import remarkGfm from 'remark-gfm';
 
 const DEFAULT_KEY = 'sk-50b85b34ff9f4b7190fac784e81091e4';
 
+const DETAIL_LEVELS = [
+  { value: 'quick', label: '快速概览', desc: '2-3 段核心总结' },
+  { value: 'standard', label: '标准分析', desc: '完整结构化分析' },
+  { value: 'deep', label: '深度拆解', desc: '极其详细的技术解读' },
+];
+
+const OUTPUT_FORMATS = [
+  { value: 'report', label: '分析报告', desc: '结构化学术分析' },
+  { value: 'explain', label: '通俗解读', desc: '像给朋友讲故事一样' },
+  { value: 'keypoints', label: '要点提炼', desc: '精简要点 + 一句话总结' },
+  { value: 'review', label: '批判性评议', desc: '优缺点 + 同行评审视角' },
+];
+
 const EXAMPLES = [
   { label: 'Attention Is All You Need', id: '1706.03762' },
   { label: 'BERT', id: '1810.04805' },
@@ -35,6 +48,8 @@ interface ImpactData {
 
 export default function Home() {
   const [input, setInput] = useState('');
+  const [detailLevel, setDetailLevel] = useState('standard');
+  const [outputFormat, setOutputFormat] = useState('report');
   const [apiKey, setApiKey] = useState(DEFAULT_KEY);
   const [showKey, setShowKey] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -67,7 +82,7 @@ export default function Home() {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: query, apiKey }),
+        body: JSON.stringify({ input: query, apiKey, detailLevel, outputFormat }),
         signal: abort.signal,
       });
 
@@ -170,6 +185,52 @@ export default function Home() {
                 {ex.label}
               </button>
             ))}
+          </div>
+
+          {/* analysis options */}
+          <div className="mt-4 pt-3 border-t border-[var(--border)] space-y-3">
+            <div className="flex flex-wrap gap-6">
+              {/* detail level */}
+              <div className="flex-1 min-w-[200px]">
+                <p className="text-xs font-medium text-[var(--muted-foreground)] mb-2">分析深度</p>
+                <div className="flex gap-2">
+                  {DETAIL_LEVELS.map(d => (
+                    <button
+                      key={d.value}
+                      onClick={() => setDetailLevel(d.value)}
+                      className={`flex-1 px-3 py-2 rounded-lg text-xs border transition-all ${
+                        detailLevel === d.value
+                          ? 'border-[var(--primary)] bg-blue-50 text-[var(--primary)] font-medium'
+                          : 'border-[var(--border)] hover:border-gray-300 text-[var(--muted-foreground)]'
+                      }`}
+                    >
+                      <div>{d.label}</div>
+                      <div className="text-[10px] mt-0.5 opacity-70">{d.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* output format */}
+              <div className="flex-1 min-w-[260px]">
+                <p className="text-xs font-medium text-[var(--muted-foreground)] mb-2">输出形式</p>
+                <div className="flex gap-2">
+                  {OUTPUT_FORMATS.map(f => (
+                    <button
+                      key={f.value}
+                      onClick={() => setOutputFormat(f.value)}
+                      className={`flex-1 px-3 py-2 rounded-lg text-xs border transition-all ${
+                        outputFormat === f.value
+                          ? 'border-[var(--primary)] bg-blue-50 text-[var(--primary)] font-medium'
+                          : 'border-[var(--border)] hover:border-gray-300 text-[var(--muted-foreground)]'
+                      }`}
+                    >
+                      <div>{f.label}</div>
+                      <div className="text-[10px] mt-0.5 opacity-70">{f.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* api key toggle */}
